@@ -86,6 +86,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Icon from '@/components/Icon';
+import BarcodeSvg from '@/components/BarcodeSvg';
 import { uomTypeOf } from '@/lib/barcodeUnits';
 /* the logo is read straight from bill-template/ at the project root - an
    import, so Next bundles it; nothing is copied into public/ */
@@ -442,8 +443,11 @@ export default function PrintPosPage() {
           <div className="font-bold">Terms &amp; Conditions:</div>
           {termLines.map((t, i) => <div key={i}>{t}</div>)}
         </div>
-        {/* the invoice-number barcode that sat here is removed (user,
-            06-10-2026) - the receipt ends with the terms and the note */}
+        {/* the bill's own barcode - the invoice number, scannable to find
+            this sale (removed 06-10-2026, back by request 13-10-2026) */}
+        <div className="mt-2 flex justify-center">
+          <BarcodeSvg value={doc.invoiceNo || ''} height={40} width={1.6} displayValue fontSize={13} className="block h-[16mm] w-[62mm]" />
+        </div>
         <div className="mt-2 text-center text-[12px] font-bold">{FOOTER_NOTE}</div>
       </main>
       )}
@@ -653,6 +657,10 @@ function SheetInvoice({
       <div className="mt-1" style={{ breakInside: 'avoid' }}>
         <div className="font-bold">Terms &amp; Conditions:</div>
         {termLines.map((line, i) => <div key={i}>{line}</div>)}
+      </div>
+      {/* the bill's barcode, as on the receipt */}
+      <div className="mt-2 flex justify-center">
+        <BarcodeSvg value={doc.invoiceNo || ''} height={40} width={1.8} displayValue fontSize={13} className="block h-[16mm] w-[70mm]" />
       </div>
       <div className="mt-2 text-center font-bold" style={{ fontSize: '1.1em' }}>{FOOTER_NOTE}</div>
     </main>
