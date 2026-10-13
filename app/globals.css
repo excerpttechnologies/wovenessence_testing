@@ -894,14 +894,80 @@ html {
   }
 }
 
-/* Printable documents (GRC Print, barcode preview).
+/* Printable documents (GRC Print, barcode preview, purchase invoice).
    At print time only .print-doc survives: the sidebar, top bar and the
    Print / Back buttons are dropped so the paper output is just the document. */
 @media print {
-  body * { visibility: hidden; }
-  .print-doc, .print-doc * { visibility: visible; }
-  .print-doc { position: absolute; inset: 0; margin: 0; width: 100%; border: 0; }
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+  
+  /* Hide everything except print-doc */
+  body > *:not(.print-doc) {
+    display: none !important;
+  }
+  
+  .print-doc {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    inset: auto !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border: none !important;
+  }
+  
+  .print-doc * {
+    visibility: visible !important;
+  }
+  
   .no-print { display: none !important; }
+  
+  /* Ensure invoice tables print correctly */
+  .prn-tbl {
+    width: 100% !important;
+    font-size: 11px !important;
+    table-layout: fixed;
+  }
+  .prn-tbl th, .prn-tbl td {
+    padding: 4px 6px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  /* Prevent page breaks inside important sections */
+  .print-doc > div {
+    break-inside: avoid;
+  }
+  
+  /* Allow table to paginate naturally */
+  .prn-tbl {
+    break-inside: auto;
+  }
+  
+  /* Prevent row breaks */
+  .prn-tbl tr {
+    break-inside: avoid;
+  }
+  
+  /* Ensure HSN summary and totals stay together */
+  .print-doc .grid {
+    break-inside: avoid;
+  }
+  
+  /* Keep footer together */
+  .print-doc .footer {
+    break-inside: avoid;
+  }
+}
+
+/* For html2pdf.js - ensure the invoice is visible when captured */
+.print-doc {
+  background: white;
+  color: black;
 }
 
 /* ==========================================================================
@@ -1297,6 +1363,34 @@ html {
     page-break-inside: avoid;
   }
 
+  /* For single-label printers like TSC TE310 (104mm x 40mm), ensure the
+     page size is correctly set when using label stock. The @page rule
+     injected by the component handles this, but we ensure no conflicting
+     styles override it. */
+  body.printing-labels {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    overflow: visible !important;
+  }
+  body.printing-labels #barcode-print-root {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    position: static !important;
+  }
+  
+  /* Ensure the barcode print root uses the full page for label stock */
+  body.printing-labels > *:not(#barcode-print-root) {
+    display: none !important;
+  }
+  
+  body.printing-labels #barcode-print-root {
+    display: block !important;
+  }
+
   /* CODE128 bars are SVG <rect fill="#000">, never a CSS background, so they
      survive Chrome's default "Background graphics: off". This keeps them
      solid black rather than dithered grey, which is what a scanner needs. */
@@ -1304,6 +1398,13 @@ html {
   #barcode-print-root svg * {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+  
+  /* For TSC TE310 specifically, ensure no page breaks within a label */
+  body.printing-labels .barcode-label {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    page-break-after: always !important;
   }
 }
 
