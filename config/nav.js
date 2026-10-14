@@ -485,6 +485,10 @@ export const NAV = [
          salesinvoice screen below did. */
       { label: 'Sales Invoice', icon: LuFileText,
         href: '/admin/transaction/intercompanysell/sales-invoice' },
+      /* the receiver saves the sender's Sales Invoice as its purchase -
+         static page for now (14-10-2026) */
+      { label: 'Auto Purchases Receiveds', icon: LuPackageCheck,
+        href: '/admin/transaction/intercompanysell/auto-purchase-receiveds' },
       /* the returns of IC challans, moved out of Receive Delivery
          Challan's Returns tab onto a page of their own */
       { label: 'Return Approval', icon: LuUndo2,
