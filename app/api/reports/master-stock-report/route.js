@@ -629,13 +629,14 @@ import dbConnect from '@/lib/db';
 import { requireSession } from '@/lib/session';
 import { escapeRegex } from '@/lib/validate';
 import { BarcodeLabel, BARCODE_STATUS } from '@/lib/barcodeLabel';
-import StockMovement from '@/models/StockMovement';
 import Item from '@/models/Item';
 import ProductGroup from '@/models/ProductGroup';
 import CompanyLocation from '@/models/CompanyLocation';
 import Uom from '@/models/Uom';
 import { Supplier } from '@/lib/contacts';
 import { json, num, r2, scopeOf, pageOf } from '@/lib/reports';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+import { imageUrl } from '@/lib/inventory';
 
 /* ==========================================================================
    /api/reports/master-stock-report  -  read-only.
@@ -651,10 +652,9 @@ import { json, num, r2, scopeOf, pageOf } from '@/lib/reports';
    transaction by lib/inventory.js). SOLD and VOID units are not stock, so a
    closing-stock report must not carry them.
 
-   NO N+1: one count, one page read, then FIVE batched lookups for the whole
-   page regardless of its size - items, groups, suppliers, locations and the
-   receipt dates. The same shape app/api/reports/barcode-report/route.js uses
-   for its GRC lookup.
+   NO N+1: one count, one page read, then FOUR batched lookups for the whole
+   page regardless of its size - items, groups, suppliers and locations. The
+   same shape app/api/reports/barcode-report/route.js uses for its GRC lookup.
    ========================================================================== */
 
 /* the report's own column order, used by the route and the export alike */
@@ -1242,6 +1242,10 @@ export async function GET(req) {
   const { businessId, locationId, finYear } = scopeOf(sp);
   const { page, perPage } = pageOf(sp);
 
+  /* Roles & Permissions (17-10-2026): Master Stock Report -> Read */
+  const denied = await screenDenial({ session, screen: SCREENS.MASTER_STOCK_REPORT, label: 'the master stock report', action: PERM.READ, businessId });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   /* ---- scope -----------------------------------------------------------
      barcodeLabel keeps its scope as plain STRINGS (lib/barcodeLabel.js:93-94)
      and carries the same ids again as ObjectIds on the current* twins. The
@@ -1465,9 +1469,9 @@ export async function GET(req) {
   const startDate = s(sp.get('startDate'));
   const endDate = s(sp.get('endDate'));
   if (startDate || endDate) {
-    filter.createdAt = {};
-    if (startDate) filter.createdAt.$gte = new Date(startDate);
-    if (endDate) filter.createdAt.$lte = new Date(endDate + 'T23:59:59.999Z');
+    filter.stockDate = {};
+    if (startDate) filter.stockDate.$gte = new Date(startDate);
+    if (endDate) filter.stockDate.$lte = new Date(endDate + 'T23:59:59.999Z');
   }
 
   /* GROUP NAME is the ITEM's group - mapRow below reads it from the Item
@@ -1540,18 +1544,9 @@ export async function GET(req) {
   if (ands.length) filter.$and = ands;
   if (exprs.length) filter.$expr = exprs.length === 1 ? exprs[0] : { $and: exprs };
 
-  /* AGE (days) is not a field - it is derived, in mapRow below, from the date
-     this unit entered stock: the earliest inward StockMovement for the
-     barcode, and the row's own createdAt only when the unit predates the
-     ledger. So it cannot be a plain clause on barcodeLabel, and filtering it
-     after the page is read would page and total the wrong set.
-     Instead the bounds are turned into a DATE WINDOW over that same derived
-     date, and the ids inside it are resolved first - against the rows every
-     other filter has already narrowed this to, so the lookup runs over the
-     result and not over the whole warehouse. Because age floors to whole
-     days:
-       age >= N  ->  entered on or before  now - N days
-       age <= M  ->  entered strictly after now - (M+1) days  */
+  /* AGE (days) is stored on the barcode as stockAge - the value the opening
+     workbook supplied. Filter that field directly, so the rows counted are
+     exactly the rows whose printed Age satisfies the filter. */
   const ageMinRaw = s(sp.get('ageMin'));
   const ageMaxRaw = s(sp.get('ageMax'));
   const ageMin = Number(ageMinRaw);
@@ -1559,40 +1554,15 @@ export async function GET(req) {
   const hasAgeMin = ageMinRaw !== '' && Number.isFinite(ageMin);
   const hasAgeMax = ageMaxRaw !== '' && Number.isFinite(ageMax);
   if (hasAgeMin || hasAgeMax) {
-    const DAY_MS = 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const ageWindow = {};
-    if (hasAgeMin) ageWindow.$lte = new Date(now - ageMin * DAY_MS);
-    if (hasAgeMax) ageWindow.$gt = new Date(now - (ageMax + 1) * DAY_MS);
-
-    const inAge = await BarcodeLabel.aggregate([
-      { $match: filter },
-      {
-        $lookup: {
-          from: 'stockmovement',
-          let: { bid: '$_id' },
-          pipeline: [
-            { $match: { $expr: { $and: [{ $eq: ['$barcodeId', '$$bid'] }, { $gt: ['$qty', 0] }] } } },
-            { $sort: { at: 1 } },
-            { $limit: 1 },
-            { $project: { at: 1 } },
-          ],
-          as: 'inward',
-        },
-      },
-      /* the same fallback mapRow uses, so the rows this keeps are exactly
-         the rows whose printed Age satisfies the filter */
-      { $addFields: { enteredAt: { $ifNull: [{ $arrayElemAt: ['$inward.at', 0] }, '$createdAt'] } } },
-      { $match: { enteredAt: ageWindow } },
-      { $project: { _id: 1 } },
-    ]);
-    filter._id = { $in: inAge.map((r) => r._id) };
+    filter.stockAge = {};
+    if (hasAgeMin) filter.stockAge.$gte = ageMin;
+    if (hasAgeMax) filter.stockAge.$lte = ageMax;
   }
 
   /* ---- SERVER-SIDE pagination: count, then read only this page ---------- */
   const total = await BarcodeLabel.countDocuments(filter);
   const rows = await BarcodeLabel.find(filter)
-    .sort({ createdAt: -1, _id: -1 })
+    .sort({ stockDate: -1, _id: -1 })
     .skip((page - 1) * perPage)
     .limit(perPage)
     .lean();
@@ -1627,7 +1597,7 @@ export async function GET(req) {
         ...(itemIds.length ? [{ _id: { $in: itemIds.map((v) => new Types.ObjectId(v)) } }] : []),
         ...(codes.length ? [{ itemCode: { $in: codes } }, { name: { $in: codes } }] : []),
       ],
-    }).select('name itemCode subGroupId').lean()
+    }).select('name itemCode subGroupId image').lean()
     : [];
   const itemById = new Map(items.map((i) => [String(i._id), i]));
   const itemByCode = new Map();
@@ -1653,17 +1623,17 @@ export async function GET(req) {
     : [];
   const groupName = new Map(groups.map((g) => [String(g._id), s(g.name)]));
 
-  /* SUPPLIER: generated rows hold the id, imported rows hold the code. */
+  /* SUPPLIER: generated rows hold the id, imported rows hold the code.
+     Codes are globally unique, so the code lookup is NOT scoped to the
+     business: the same placeholder vendor (G741) appears on stock rows in
+     more than one business, and filtering here made those rows print blank. */
   const supIds = supKeys.filter((v) => isValidObjectId(v));
   const supCodes = supKeys.filter((v) => !isValidObjectId(v));
   const suppliers = supKeys.length
     ? await Supplier.find({
       $or: [
         ...(supIds.length ? [{ _id: { $in: supIds.map((v) => new Types.ObjectId(v)) } }] : []),
-        ...(supCodes.length ? [{
-          contactId: { $in: supCodes },
-          ...(businessId ? { businessId } : {}),
-        }] : []),
+        ...(supCodes.length ? [{ contactId: { $in: supCodes } }] : []),
       ],
     }).select('contactId businessName prefix firstName middleName lastName gstStatus billingMobile shippingMobile').lean()
     : [];
@@ -1685,28 +1655,19 @@ export async function GET(req) {
     : [];
   const locName = new Map(locs.map((l) => [String(l._id), s(l.name)]));
 
-  /* DATE: when this unit entered stock. The ledger's own inward row is the
-     authoritative answer (models/StockMovement.js is append-only and is what
-     every stock report reads), so the earliest inward movement for the
-     barcode is used, and the row's own createdAt only when the unit predates
-     the ledger. */
-  const moves = ids.length
-    ? await StockMovement.find({ barcodeId: { $in: ids }, qty: { $gt: 0 } })
-      .select('barcodeId at').sort({ at: 1 }).lean()
-    : [];
-  const inwardAt = new Map();
-  moves.forEach((m) => {
-    const k = String(m.barcodeId);
-    if (!inwardAt.has(k) && m.at) inwardAt.set(k, m.at);
-  });
-
   /* ---- the mapper: ONE place that turns a barcode row into a report row -- */
   const asOf = Date.now();
   const DAY = 24 * 60 * 60 * 1000;
   const mapRow = (r) => {
     const item = itemOf(r);
     const sup = supOf(r);
-    const date = inwardAt.get(String(r._id)) || r.createdAt || null;
+    /* DATE and AGE are the opening workbook's own fields. Do not substitute
+       StockMovement or createdAt here: those describe when the row was
+       imported, not the stock date printed on the label. If an older row has
+       a stockDate but no stockAge, derive the age from that stockDate. */
+    const date = r.stockDate || null;
+    const calculatedAge = date ? Math.max(0, Math.floor((asOf - new Date(date).getTime()) / DAY)) : null;
+    const age = (r.stockAge !== undefined && r.stockAge !== null) ? r.stockAge : calculatedAge;
     /* Close Qty: the unit's own current quantity. qtyNum is the number the
        whole application sums (lib/icStock.js, the IC challan picker), and it
        already carries the UOM rule - PC+unique 1, PC+batch the received
@@ -1731,7 +1692,7 @@ export async function GET(req) {
       date: date || null,
       docNo: s(r.grcNo),
       stockPoint: s(r.stockPoint),
-      age: date ? Math.max(0, Math.floor((asOf - new Date(date).getTime()) / DAY)) : null,
+      age,
       /* the unit's OWN number, never the composed barcodeGenerated */
       barcodeNumber: s(r.barcodeNo) || EMPTY,
       closeQty,
@@ -1748,7 +1709,9 @@ export async function GET(req) {
       wsp: num(r.wspPrice),
       ecom: num(r.dpPrice),
       uom: s(r.uom) || EMPTY,
-      imageUrl: s(r.imageUrl),
+      imageUrl: imageUrl(r.imageUrl || r.filePath || '', r.barcodeNo || r.barcodeGenerated, r.oldBarcode)
+        || imageUrl(item?.image || ''),
+      itemImageUrl: imageUrl(item?.image || ''),
     };
   };
   const mapped = rows.map(mapRow);

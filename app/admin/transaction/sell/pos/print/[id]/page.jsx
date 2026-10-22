@@ -84,15 +84,20 @@
 
 'use client';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import Icon from '@/components/Icon';
 import BarcodeSvg from '@/components/BarcodeSvg';
 import { uomTypeOf } from '@/lib/barcodeUnits';
+import { shareWhatsApp, shareEmail, shareInstagram } from '@/lib/shareRoutes';
 /* the logo is read straight from bill-template/ at the project root - an
    import, so Next bundles it; nothing is copied into public/ */
 import logoFile from '@/bill-template/posinvoice-temp.png';
 
 const LOGO = logoFile.src || logoFile;
+/* the second logo, printed under the first (user, 19-10-2026) */
+import logoFile2 from '@/bill-template/posinvoice-temp1.png';
+const LOGO2 = logoFile2.src || logoFile2;
 const TAGLINE = 'TRADITION | FABRICS | TIMELESS YOU';
 const THANK_YOU = '!! Thank you for your purchase, YOU MAKE OUR DAY !!';
 const DEFAULT_TERMS = [
@@ -120,6 +125,9 @@ const lineNet = (item) => {
   const gross = Number(item.rsp || 0) * Number(item.qty || 0);
   return gross * (1 - Number(item.discountPct || 0) / 100);
 };
+/* A5 / A4 only (19-10-2026): the line's discount in rupees - MRP x qty less
+   what it nets to, never negative (the same rule as the Disc Amt total) */
+const lineDisc = (item) => Math.max(0, r2(Number(item.rsp || 0) * Number(item.qty || 0) - lineNet(item)));
 const lineTax = (item) => {
   const rate = Number(item.gst || 0);
   const net = lineNet(item);
@@ -155,7 +163,8 @@ function setPageSize(format) {
   if (PAPER[format]) {
     size = PAPER[format].name + ' portrait';
   } else {
-    const el = document.querySelector('.pos-receipt');
+    /* the ON-SCREEN copy - the print copy is display:none until printing */
+    const el = document.querySelector('.pos-screen .pos-receipt');
     if (!el) return;
     size = '80mm ' + (Math.ceil((el.scrollHeight * 25.4) / 96) + 8) + 'mm';
   }
@@ -175,6 +184,12 @@ export default function PrintPosPage() {
   /* the paper last printed on, per PC - a counter with a thermal printer and
      a back office with an A4 one each keep their own */
   const [format, setFormat] = useState('receipt');
+  /* document.body exists only in the browser - the print copy is portalled
+     there once mounted */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  /* what the last share button did, for one line of feedback */
+  const [shareNote, setShareNote] = useState(null);   // { error } | { notice }
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(FORMAT_KEY);
@@ -223,6 +238,30 @@ export default function PrintPosPage() {
   const sgst = r2(taxSum - cgst);
   const shipping = Number(doc.shipping || 0);
   const netAmount = Number(doc.totalAmount || 0);
+
+  /* THE SHARE MESSAGE - built exactly as on the View POS screen
+     (components/PosInvoiceView.jsx). Whole rupees, as on the till. */
+  const shareRupees = (v) => 'Rs ' + Math.trunc(Number(v || 0));
+  const shareChange = Math.max(0, Number(doc.paid || 0) - Number(doc.totalAmount || 0));
+  const shareLines = [
+    'Invoice No: ' + (doc.invoiceNo || '-'),
+    'Date: ' + (doc.date ? new Date(doc.date).toLocaleDateString('en-GB') : '-'),
+    'Customer: ' + (doc.customerName || 'Walk-in Customer'),
+    '',
+    'Items:',
+    ...items.map((item, i) => (i + 1) + '. '
+      + (item.description || item.itemName || item.name || item.itemCode || 'Item')
+      + ' x ' + (item.qty || 0) + ' = ' + shareRupees(item.netAmount ?? item.lineTotal)),
+    '',
+    'Total: ' + shareRupees(doc.totalAmount),
+    'Paid: ' + shareRupees(doc.paid),
+    ...(shareChange > 0 ? ['Cash Return: ' + shareRupees(shareChange)] : []),
+    ...(Number(doc.sellDue || 0) > 0 ? ['Balance Due: ' + shareRupees(doc.sellDue)] : []),
+    '',
+    'Thank you for shopping with ' + (doc.locationName || doc.businessName || 'us') + '.',
+  ];
+  const shareSubject = 'Invoice ' + (doc.invoiceNo || '') + ' - ' + (doc.businessName || '');
+  const shareMessage = [shareSubject, '', ...shareLines].join('\n');
   /* the whole-rupee correction between the lines and what was charged */
   const roundOff = r2(netAmount - shipping - netSum);
   const pcs = r2(items.filter((it) => kindOf(it) === 'PC').reduce((a, it) => a + Number(it.qty || 0), 0));
@@ -280,12 +319,38 @@ export default function PrintPosPage() {
           ))}
         </div>
         <div className="flex gap-2">
+          {/* SHARE (user, 21-10-2026) - the same three buttons and the same
+              message as the View POS screen (components/PosInvoiceView.jsx);
+              screen-only, the printed bill is unchanged */}
+          <button type="button" title="Share on WhatsApp" aria-label="Share on WhatsApp" className="flex h-9 w-9 items-center justify-center rounded bg-[#25D366] text-white hover:bg-[#1da851]" onClick={() => setShareNote(shareWhatsApp(shareMessage))}><Icon name="whatsapp" size={18} /></button>
+          <button type="button" title="Share on Instagram" aria-label="Share on Instagram" className="flex h-9 w-9 items-center justify-center rounded bg-[#E1306C] text-white hover:bg-[#c1275c]" onClick={async () => setShareNote(await shareInstagram(shareSubject, shareMessage))}><Icon name="instagram" size={18} /></button>
+          <button type="button" title="Share by Email" aria-label="Share by Email" className="flex h-9 w-9 items-center justify-center rounded bg-brand text-white hover:opacity-90" onClick={() => setShareNote(shareEmail(shareSubject, shareLines.join('\n')))}><Icon name="mail" size={18} /></button>
           <button type="button" className="btn" onClick={() => { setPageSize(format); window.print(); }}><Icon name="printer" size={14} /> Print Invoice</button>
-          <button type="button" className="btn border-danger bg-danger text-white hover:border-[#9f1d17] hover:bg-[#9f1d17]" title="Close" aria-label="Close" onClick={() => router.push('/admin/transaction/sell/pos')}><Icon name="x" size={16} /></button>
+          <button type="button" className="btn border-danger bg-danger text-white hover:border-[#9f1d17] hover:bg-[#9f1d17]" title="Close" aria-label="Close" onClick={() => {
+            /* Close goes back to the POS billing screen for this bill's
+               business / location / year (user, 21-10-2026) */
+            const idOf = (v) => String((v && v._id) || v || '');
+            const q = new URLSearchParams({ business: idOf(doc.businessId), location: idOf(doc.locationId), finYear: doc.finYear || '' });
+            router.push('/admin/pos/add?' + q.toString());
+          }}><Icon name="x" size={16} /></button>
         </div>
+        {shareNote && (shareNote.error || shareNote.notice) && (
+          <div className={'w-full text-right text-[11px] ' + (shareNote.error ? 'text-danger' : 'text-inkmuted')}>
+            {shareNote.error || shareNote.notice}
+          </div>
+        )}
       </div>
 
-      {paper && (
+      {/* PRINTING (user, 15-10-2026 - it printed blank). globals.css hides
+          `body > *:not(.print-doc)` at print time, which removes the whole
+          app shell - and this invoice with it, since it sits inside the
+          shell. That rule is a teammate's and other print screens rely on
+          it, so it is not touched. Instead the document is rendered twice:
+          on screen inside the page (.pos-screen, never printed), and as a
+          print-only copy portalled straight under <body> as
+          `.print-doc.pos-print-copy`, which that rule keeps. */}
+      {(() => {
+        const docEl = paper ? (
         <SheetInvoice
           paper={paper}
           doc={doc}
@@ -302,14 +367,14 @@ export default function PrintPosPage() {
           totals={{ netSum, mrpSum, discSum, taxSum, taxable, cgst, sgst, shipping, netAmount, roundOff, pcs, mtr }}
           hsnRows={hsnRows}
         />
-      )}
-
-      {!paper && (
-      <main className="print-doc pos-receipt w-[80mm] bg-white px-2 py-3 text-[10.5px] leading-snug text-black shadow print:shadow-none">
+        ) : (
+      <main className="pos-receipt w-[80mm] bg-white px-2 py-3 text-[10.5px] leading-snug text-black shadow print:shadow-none">
         {/* ------------------------------------------------ letterhead -- */}
         <div className="text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={LOGO} alt={seller.name || 'Logo'} className="mx-auto mb-1 w-[62mm]" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={LOGO2} alt="" className="mx-auto mb-1 w-[50mm]" />
           <div className="text-[8.5px] tracking-[0.15em]">{TAGLINE}</div>
           <div className="mt-1 text-[12px] font-bold">{seller.name || doc.businessName}</div>
           {address && <div>{address}</div>}
@@ -450,7 +515,14 @@ export default function PrintPosPage() {
         </div>
         <div className="mt-2 text-center text-[12px] font-bold">{FOOTER_NOTE}</div>
       </main>
-      )}
+        );
+        return (
+          <>
+            <div className="pos-screen no-print">{docEl}</div>
+            {mounted && createPortal(<div className="print-doc pos-print-copy">{docEl}</div>, document.body)}
+          </>
+        );
+      })()}
 
       {/* an 80 mm roll, no page margins - scoped to this screen only */}
       <style jsx global>{`
@@ -462,10 +534,21 @@ export default function PrintPosPage() {
           font-family: 'Arial Narrow', 'Arial Unicode MS', 'Liberation Sans Narrow', 'Nimbus Sans Narrow', Arial, 'Liberation Sans', sans-serif;
           font-stretch: condensed;
         }
+        /* the print-only copy (see the PRINTING note above) never shows on
+           screen */
+        @media screen {
+          .pos-print-copy { display: none !important; }
+        }
         @media print {
-          /* the page SIZE is set by sizePrintPage() from the receipt's
+          /* the page SIZE is set by setPageSize() from the receipt's
              measured height; this is only the fallback margin */
           @page { margin: 0; }
+          /* globals.css gives every .print-doc width 100% / no padding; the
+             copy's own wrapper takes that, the receipt / sheet inside keep
+             their paper size - two classes, so these win over one */
+          .print-doc.pos-print-copy { padding: 0 !important; margin: 0 !important; }
+          .pos-print-copy .pos-receipt { width: 80mm !important; padding: 2mm !important; margin: 0 auto !important; box-shadow: none !important; }
+          .pos-print-copy .pos-sheet { margin: 0 auto !important; min-height: 0 !important; box-shadow: none !important; }
           /* centred on the sheet: on an 80mm roll it fills the width
              anyway, but a printer that ignores @page size (an A4 printer,
              "Save as PDF") used to put the receipt in the left corner -
@@ -497,12 +580,21 @@ function SheetInvoice({
   paper, doc, seller, items, when, billDate, address, place, phones, termLines,
   paidBy, changeReturn, totals: t, hsnRows,
 }) {
-  const cell = 'border border-black px-1.5 py-0.5';
+  /* No boxes (client, 19-10-2026): laid out like the 4-inch bill - centred
+     letterhead, dashed rules between sections, rows without cell borders.
+     The content is exactly what this sheet printed. A5 / A4 only; the 4-inch
+     receipt above is frozen and untouched. */
+  const th = 'px-1.5 py-1 font-bold';
+  const td = 'px-1.5 py-0.5 align-top';
+  const Rule = () => <div className="my-1.5 border-t border-dashed border-black" />;
+  const Line = ({ label, children }) => (
+    <div className="flex justify-between gap-2"><span>{label}</span><span>{children}</span></div>
+  );
   const sellerName = seller.name || doc.businessName || '';
 
   return (
     <main
-      className="print-doc pos-sheet bg-white leading-snug text-black shadow"
+      className="pos-sheet bg-white leading-snug text-black shadow"
       style={{
         width: paper.w + 'mm',
         minHeight: paper.h + 'mm',
@@ -511,31 +603,32 @@ function SheetInvoice({
       }}
     >
       {/* ------------------------------------------------ letterhead -- */}
-      <div className="flex items-start gap-4 border-b-2 border-black pb-2">
-        <div className="shrink-0 text-center" style={{ width: paper.w * 0.3 + 'mm' }}>
+      <div className="text-center">
+        {/* both logos in one row, centred (user, 19-10-2026) */}
+        <div className="flex items-center justify-center" style={{ gap: paper.w * 0.05 + 'mm' }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={LOGO} alt={sellerName || 'Logo'} className="w-full" />
-          <div className="mt-0.5 tracking-[0.12em]" style={{ fontSize: '0.75em' }}>{TAGLINE}</div>
+          <img src={LOGO} alt={sellerName || 'Logo'} style={{ width: paper.w * 0.32 + 'mm' }} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={LOGO2} alt="" style={{ width: paper.w * 0.32 + 'mm' }} />
         </div>
-        <div className="flex-1 text-right">
-          <div className="font-bold" style={{ fontSize: '1.45em' }}>{sellerName}</div>
-          {address && <div>{address}</div>}
-          {place && <div>{place}</div>}
-          {phones.length > 0 && <div>Ph: {phones.join(' / ')}</div>}
-          {seller.gstin && <div className="font-bold">GSTIN: {seller.gstin}</div>}
-        </div>
+        <div className="mt-0.5 tracking-[0.15em]" style={{ fontSize: '0.75em' }}>{TAGLINE}</div>
+        <div className="mt-1 font-bold" style={{ fontSize: '1.35em' }}>{sellerName}</div>
+        {address && <div>{address}</div>}
+        {place && <div>{place}</div>}
+        {phones.length > 0 && <div>Ph: {phones.join(' / ')}</div>}
+        {seller.gstin && <div className="font-bold">GSTIN: {seller.gstin}</div>}
+        <div className="mt-1 font-bold tracking-wide" style={{ fontSize: '1.3em' }}>GST Invoice</div>
       </div>
 
-      <div className="my-1.5 text-center font-bold tracking-wide" style={{ fontSize: '1.3em' }}>GST Invoice</div>
-
       {/* --------------------------------- customer | bill particulars -- */}
-      <div className="grid grid-cols-2 border border-black">
-        <div className="border-r border-black px-2 py-1">
+      <Rule />
+      <div className="grid grid-cols-2 gap-x-6">
+        <div>
           <div>Customer: {doc.customerName || 'Walk-in Customer'}{doc.customerContact ? ' (' + doc.customerContact + ')' : ''}</div>
           {doc.customerAddress && <div>Address: {doc.customerAddress}</div>}
           {doc.customerGstn && <div>GSTIN: {doc.customerGstn}</div>}
         </div>
-        <div className="grid grid-cols-[auto_1fr] gap-x-2 px-2 py-1">
+        <div className="grid grid-cols-[auto_1fr] justify-end gap-x-2">
           <span>Inv #</span><b>: {doc.invoiceNo || '-'}</b>
           <span>Date</span><span>: {billDate.toLocaleDateString('en-GB')}</span>
           <span>Time</span><span>: {when.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
@@ -545,115 +638,116 @@ function SheetInvoice({
       </div>
 
       {/* ------------------------------------------------------ items -- */}
-      <table className="mt-2 w-full border-collapse">
+      <table className="mt-1.5 w-full border-collapse">
         <thead>
-          <tr className="bg-[#f2f2f2] font-bold">
-            <th className={cell + ' text-center'} style={{ width: '6%' }}>Sl.</th>
-            <th className={cell + ' text-left'}>Description</th>
-            <th className={cell + ' text-right'} style={{ width: '7%' }}>GST</th>
-            <th className={cell + ' text-center'} style={{ width: '11%' }}>HSN</th>
-            <th className={cell + ' text-right'} style={{ width: '6%' }}>Qty</th>
-            <th className={cell + ' text-left'} style={{ width: '12%' }}>Bar Code</th>
-            <th className={cell + ' text-right'} style={{ width: '10%' }}>MRP</th>
-            <th className={cell + ' text-right'} style={{ width: '8%' }}>Disc%</th>
-            <th className={cell + ' text-right'} style={{ width: '11%' }}>Net Amt</th>
+          <tr className="border-y border-dashed border-black">
+            {/* the client's order for A5 / A4 (19-10-2026): Sl, Item
+                Description, Barcode, Qty, HSN, GST, MRP, Disc%, Disc Amt,
+                Net Amt. The 4-inch receipt is frozen and keeps its own. */}
+            <th className={th + ' text-left'} style={{ width: '5%' }}>Sl.</th>
+            <th className={th + ' text-left'}>Item Description</th>
+            <th className={th + ' text-left'} style={{ width: '12%' }}>Barcode</th>
+            <th className={th + ' text-right'} style={{ width: '6%' }}>Qty</th>
+            <th className={th + ' text-center'} style={{ width: '10%' }}>HSN</th>
+            <th className={th + ' text-right'} style={{ width: '6%' }}>GST</th>
+            <th className={th + ' text-right'} style={{ width: '9%' }}>MRP</th>
+            <th className={th + ' text-right'} style={{ width: '7%' }}>Disc%</th>
+            <th className={th + ' text-right'} style={{ width: '9%' }}>Disc Amt</th>
+            <th className={th + ' text-right'} style={{ width: '10%' }}>Net Amt</th>
           </tr>
         </thead>
         <tbody>
           {items.map((it, i) => (
             <tr key={i}>
-              <td className={cell + ' text-center align-top'}>{i + 1}</td>
-              <td className={cell + ' align-top font-semibold'}>{it.description || it.itemName || it.name || it.itemCode || '-'}</td>
-              <td className={cell + ' text-right align-top'}>{r2(it.gst)}%</td>
-              <td className={cell + ' text-center align-top'}>{it.hsn || '-'}</td>
-              <td className={cell + ' text-right align-top'}>{qtyText(it.qty)}</td>
-              <td className={cell + ' align-top'}>{it.barcodeNo || it.barcode || '-'}</td>
-              <td className={cell + ' text-right align-top'}>{inr0(it.rsp)}</td>
-              <td className={cell + ' text-right align-top'}>{r2(it.discountPct)}</td>
-              <td className={cell + ' text-right align-top'}>{inr0(lineNet(it))}</td>
+              <td className={td}>{i + 1}</td>
+              <td className={td + ' font-semibold'}>{it.description || it.itemName || it.name || it.itemCode || '-'}</td>
+              <td className={td}>{it.barcodeNo || it.barcode || '-'}</td>
+              <td className={td + ' text-right'}>{qtyText(it.qty)}</td>
+              <td className={td + ' text-center'}>{it.hsn || '-'}</td>
+              <td className={td + ' text-right'}>{r2(it.gst)}%</td>
+              <td className={td + ' text-right'}>{inr0(it.rsp)}</td>
+              <td className={td + ' text-right'}>{r2(it.discountPct)}</td>
+              <td className={td + ' text-right'}>{inr0(lineDisc(it))}</td>
+              <td className={td + ' text-right'}>{inr0(lineNet(it))}</td>
             </tr>
           ))}
-          {/* as on the receipt: MRP total, the discount AMOUNT under Disc%,
-              and the net total, captioned because Disc% holds an amount */}
-          <tr className="font-bold">
-            <td className={cell} colSpan={6}>Totals &nbsp; Pc(s) {qtyText(t.pcs)} &nbsp; Mtr {qtyText(t.mtr)}</td>
-            <td className={cell + ' text-right'}>{inr0(t.mrpSum)}<div className="font-normal" style={{ fontSize: '0.75em' }}>MRP</div></td>
-            <td className={cell + ' text-right'}>{inr0(t.discSum)}<div className="font-normal" style={{ fontSize: '0.75em' }}>Disc Amt</div></td>
-            <td className={cell + ' text-right'}>{inr0(t.netSum)}<div className="font-normal" style={{ fontSize: '0.75em' }}>Net Amt</div></td>
+          {/* MRP, discount and net totals under their own headings */}
+          <tr className="border-y border-dashed border-black font-bold">
+            <td className={td} colSpan={6}>Totals &nbsp; Pc(s) {qtyText(t.pcs)} &nbsp; Mtr {qtyText(t.mtr)}</td>
+            <td className={td + ' text-right'}>{inr0(t.mrpSum)}</td>
+            <td className={td} />
+            <td className={td + ' text-right'}>{inr0(t.discSum)}</td>
+            <td className={td + ' text-right'}>{inr0(t.netSum)}</td>
           </tr>
         </tbody>
       </table>
 
       {/* ------------------------------- payment modes | tax figures -- */}
-      <div className="mt-2 grid grid-cols-2 gap-4">
+      <div className="mt-1.5 grid grid-cols-2 gap-x-8">
         <div>
           <div className="font-bold">Payment Mode:</div>
-          {[...paidBy.entries()].map(([m, a]) => (
-            <div key={m} className="flex justify-between gap-2 border-b border-dotted border-black"><span>{m}</span><span>{inr0(a)}</span></div>
-          ))}
-          {changeReturn > 0 && (
-            <div className="flex justify-between gap-2 border-b border-dotted border-black"><span>Refund</span><span>{inr0(changeReturn)}</span></div>
-          )}
-          {Number(doc.sellDue || 0) > 0 && (
-            <div className="flex justify-between gap-2 border-b border-dotted border-black"><span>Due</span><span>{inr0(doc.sellDue)}</span></div>
-          )}
+          {[...paidBy.entries()].map(([m, a]) => <Line key={m} label={m}>{inr0(a)}</Line>)}
+          {changeReturn > 0 && <Line label="Refund">{inr0(changeReturn)}</Line>}
+          {Number(doc.sellDue || 0) > 0 && <Line label="Due">{inr0(doc.sellDue)}</Line>}
         </div>
         <div>
-          <div className="flex justify-between gap-2"><span>Taxable Val</span><span>{inr(t.taxable)}</span></div>
-          <div className="flex justify-between gap-2"><span>CGST</span><span>{inr(t.cgst)}</span></div>
-          <div className="flex justify-between gap-2"><span>SGST</span><span>{inr(t.sgst)}</span></div>
-          {t.shipping > 0 && <div className="flex justify-between gap-2"><span>Shipping</span><span>{inr(t.shipping)}</span></div>}
-          <div className="flex justify-between gap-2"><span>Round Off</span><span>{inr(t.roundOff)}</span></div>
-          <div className="mt-1 flex justify-between gap-2 border-y-2 border-black py-0.5 font-bold" style={{ fontSize: '1.25em' }}>
+          <Line label="Taxable Val">{inr(t.taxable)}</Line>
+          <Line label="CGST">{inr(t.cgst)}</Line>
+          <Line label="SGST">{inr(t.sgst)}</Line>
+          {t.shipping > 0 && <Line label="Shipping">{inr(t.shipping)}</Line>}
+          <Line label="Round Off">{inr(t.roundOff)}</Line>
+          <div className="mt-0.5 flex justify-between gap-2 border-t border-black pt-0.5 font-bold" style={{ fontSize: '1.2em' }}>
             <span>Net Amt</span><span>{inr0(t.netAmount)}</span>
           </div>
         </div>
       </div>
 
       {/* ---------------------------------------------- tax summary -- */}
-      <div className="mt-2 text-center font-bold">TAX SUMMARY</div>
-      <table className="w-full border-collapse">
+      <Rule />
+      <div className="text-center font-bold">TAX SUMMARY</div>
+      <table className="mt-0.5 w-full border-collapse">
         <thead>
-          <tr className="bg-[#f2f2f2] font-bold">
-            <th className={cell + ' text-left'} rowSpan={2}>HSN</th>
-            <th className={cell + ' text-right'} rowSpan={2}>Taxable Value</th>
-            <th className={cell + ' text-center'} colSpan={2}>CGST</th>
-            <th className={cell + ' text-center'} colSpan={2}>SGST</th>
-            <th className={cell + ' text-right'} rowSpan={2}>Total Tax</th>
+          <tr className="border-y border-black">
+            <th className={th + ' text-left'} rowSpan={2}>HSN</th>
+            <th className={th + ' text-right'} rowSpan={2}>Taxable Value</th>
+            <th className={th + ' text-center'} colSpan={2}>CGST</th>
+            <th className={th + ' text-center'} colSpan={2}>SGST</th>
+            <th className={th + ' text-right'} rowSpan={2}>Total Tax</th>
           </tr>
-          <tr className="bg-[#f2f2f2] font-bold">
-            <th className={cell + ' text-right'}>Rate</th>
-            <th className={cell + ' text-right'}>Amount</th>
-            <th className={cell + ' text-right'}>Rate</th>
-            <th className={cell + ' text-right'}>Amount</th>
+          <tr className="border-b border-black">
+            <th className={th + ' text-right'}>Rate</th>
+            <th className={th + ' text-right'}>Amount</th>
+            <th className={th + ' text-right'}>Rate</th>
+            <th className={th + ' text-right'}>Amount</th>
           </tr>
         </thead>
         <tbody>
           {hsnRows.map((h) => (
             <tr key={h.hsn + h.rate}>
-              <td className={cell}>{h.hsn}</td>
-              <td className={cell + ' text-right'}>{inr(h.taxable)}</td>
-              <td className={cell + ' text-right'}>{r2(h.rate / 2)}%</td>
-              <td className={cell + ' text-right'}>{inr(h.tax / 2)}</td>
-              <td className={cell + ' text-right'}>{r2(h.rate / 2)}%</td>
-              <td className={cell + ' text-right'}>{inr(h.tax / 2)}</td>
-              <td className={cell + ' text-right'}>{inr(h.tax)}</td>
+              <td className={td}>{h.hsn}</td>
+              <td className={td + ' text-right'}>{inr(h.taxable)}</td>
+              <td className={td + ' text-right'}>{r2(h.rate / 2)}%</td>
+              <td className={td + ' text-right'}>{inr(h.tax / 2)}</td>
+              <td className={td + ' text-right'}>{r2(h.rate / 2)}%</td>
+              <td className={td + ' text-right'}>{inr(h.tax / 2)}</td>
+              <td className={td + ' text-right'}>{inr(h.tax)}</td>
             </tr>
           ))}
-          <tr className="font-bold">
-            <td className={cell}>Totals</td>
-            <td className={cell + ' text-right'}>{inr(t.taxable)}</td>
-            <td className={cell} />
-            <td className={cell + ' text-right'}>{inr(t.cgst)}</td>
-            <td className={cell} />
-            <td className={cell + ' text-right'}>{inr(t.sgst)}</td>
-            <td className={cell + ' text-right'}>{inr(t.taxSum)}</td>
+          <tr className="border-t border-black font-bold">
+            <td className={td}>Totals</td>
+            <td className={td + ' text-right'}>{inr(t.taxable)}</td>
+            <td className={td} />
+            <td className={td + ' text-right'}>{inr(t.cgst)}</td>
+            <td className={td} />
+            <td className={td + ' text-right'}>{inr(t.sgst)}</td>
+            <td className={td + ' text-right'}>{inr(t.taxSum)}</td>
           </tr>
         </tbody>
       </table>
 
       {/* ------------------------------------------------- footer -- */}
-      <div className="mt-3 text-center font-bold">{THANK_YOU}</div>
+      <Rule />
+      <div className="text-center font-bold">{THANK_YOU}</div>
       <div className="mt-1" style={{ breakInside: 'avoid' }}>
         <div className="font-bold">Terms &amp; Conditions:</div>
         {termLines.map((line, i) => <div key={i}>{line}</div>)}

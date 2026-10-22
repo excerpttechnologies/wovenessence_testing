@@ -3091,6 +3091,7 @@ import AttachmentsDialog from "./AttachmentsDialog";
 import ShareDocDialog from "./ShareDocDialog";
 import GrtPrintDocument from "./GrtPrintDocument";
 import { useScope } from "./ScopeContext";
+import NumberedPager, { SortHeader } from "./NumberedPager";
 import { fmt, toCsv, toXlsHtml, download, printTable } from "@/lib/format";
  
 /* ==========================================================================
@@ -3190,7 +3191,7 @@ const GRT_VIEW_LABELS = {
 
 export default function ListView({ cfg, slug }) {
   const router = useRouter();
-  const { business, location, finYear, businessReady, locationReady } = useScope();
+  const { business, location, finYear, businessReady, locationReady, can } = useScope();
   const [grtBusiness, setGrtBusiness] = useState(null);
   const [state, setState] = useState({
     rows: [],
@@ -3204,6 +3205,12 @@ export default function ListView({ cfg, slug }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
+  /* cfg.pager === "numbered" / cfg.sortable (19-10-2026) - the same opt-in
+     pager and header sort as components/ListView.jsx. perPage stays null
+     until the operator picks one, so the endpoint's default is kept. */
+  const numberedPager = cfg.pager === "numbered";
+  const [perPage, setPerPage] = useState(null);
+  const [sort, setSort] = useState({ key: null, dir: null });
   const [modal, setModal] = useState(false);
   const [filters, setFilters] = useState({});
   const [menuFor, setMenuFor] = useState(null);
@@ -3321,6 +3328,21 @@ export default function ListView({ cfg, slug }) {
  
   const slugPath = cfg.slugPath || slug;
   const base = (cfg.basePath || "/admin/setting/") + slugPath;
+  /* Roles & Permissions (17-10-2026): hide what the server would refuse.
+     base is the screen's own href (/admin/transaction/purchase/grt). An
+     action icon this list does not name renders as Delete below, so it is
+     judged as Delete here too. */
+  const mayCreate = can(base, "create");
+  const mayUpdate = can(base, "update");
+  const mayDelete = can(base, "delete");
+  const iconAllowed = (a) => {
+    if (a === "view" || a === "print" || a === "share") return true;
+    if (a === "edit") return mayUpdate;
+    if (a === "upload") return mayCreate || mayUpdate;
+    return mayDelete;
+  };
+  const menuAllowed = (m) => !m.need
+    || (m.need === "update" ? mayUpdate : m.need === "create" ? mayCreate : m.need === "delete" ? mayDelete : true);
  
   const searched = !cfg.searchOnly || Object.keys(filters).length > 0;
  
@@ -3384,6 +3406,11 @@ export default function ListView({ cfg, slug }) {
     Object.entries(filters).forEach(([k, v]) => {
       if (v) qs.set(k, v);
     });
+    if (numberedPager && perPage) qs.set("perPage", String(perPage));
+    if (sort.key && sort.dir) {
+      qs.set("sortBy", sort.key);
+      qs.set("sortDir", sort.dir);
+    }
  
     /* cfg.fixedQuery pins query parameters the SCREEN owns rather than the
        operator - the Incoming Transfers list is the same endpoint as Stock
@@ -3421,6 +3448,7 @@ export default function ListView({ cfg, slug }) {
            filtered set - see the endpoint. Absent on endpoints that do not
            send one, which is why the cards render only when both exist. */
         summary: d.summary || null,
+        perPage: Number(d.perPage) || null,
       });
     } catch (e) {
       if (seq === reqRef.current) setError("Network error - could not reach the server.");
@@ -3441,6 +3469,9 @@ export default function ListView({ cfg, slug }) {
     cfg.fixedQuery,
     scopePending,
     noBusiness,
+    numberedPager,
+    perPage,
+    sort,
   ]);
  
   useEffect(() => {
@@ -3686,7 +3717,7 @@ export default function ListView({ cfg, slug }) {
               }
               return router.push(base + "/add");
             }}
-            showAdd={cfg.showAdd !== false}
+            showAdd={cfg.showAdd !== false && mayCreate}
             showCsv={cfg.showCsv !== false}
             onExportCsv={() =>
               download(
@@ -3714,7 +3745,17 @@ export default function ListView({ cfg, slug }) {
                   {actionPos === "left" && <th>Action</th>}
                   {cfg.serialNumber && <th>#</th>}
                   {visible.map((c, i) => (
-                    <th key={c.t + i}>{c.t}</th>
+                    c.k && (cfg.sortable === true || (cfg.sortable || []).includes(c.k)) ? (
+                      <SortHeader
+                        key={c.t + i}
+                        label={c.t}
+                        sortKey={c.sortKey || c.k}
+                        sort={sort}
+                        onSort={(next) => { setSort(next); setPage(1); }}
+                      />
+                    ) : (
+                      <th key={c.t + i}>{c.t}</th>
+                    )
                   ))}
                   {actionPos === "right" && <th>Action</th>}
                 </tr>
@@ -3772,9 +3813,10 @@ export default function ListView({ cfg, slug }) {
                                   label: "Edit",
                                   icon: "pencil",
                                   to: (r) => base + "/" + r._id,
+                                  need: "update",
                                 },
                               ]
-                            ).map((m) => ({ 
+                            ).filter(menuAllowed).map((m) => ({ 
                               ...m, 
                               href: m.to ? m.to(row) : undefined,
                               rowId: row._id 
@@ -3808,7 +3850,7 @@ export default function ListView({ cfg, slug }) {
                               typeof cfg.actionIcons === "function"
                                 ? cfg.actionIcons(row) || []
                                 : cfg.actionIcons || ["view", "edit", "delete"]
-                            ).map((a) => {
+                            ).filter(iconAllowed).map((a) => {
                               if (a === "view")
                                 return (
                                   <button
@@ -3919,6 +3961,17 @@ export default function ListView({ cfg, slug }) {
             </table>
           </div>
  
+          {numberedPager ? (
+            <NumberedPager
+              page={state.page}
+              pages={state.pages}
+              total={state.total}
+              shown={state.rows.length}
+              perPage={perPage || state.perPage || PER_PAGE}
+              onPage={setPage}
+              onPerPage={(n) => { setPerPage(n); setPage(1); }}
+            />
+          ) : (
           <div className="flex items-center pt-3 text-[13px] text-cell">
             <span>
               Page <b className="text-brand-link">{state.page}</b> of{" "}
@@ -3942,6 +3995,7 @@ export default function ListView({ cfg, slug }) {
               </button>
             </span>
           </div>
+          )}
         </div>
       </div>
       {viewRow && cfg.viewModal && (

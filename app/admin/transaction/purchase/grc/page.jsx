@@ -8,6 +8,10 @@ const CONFIG = {
   basePath: '/admin/',
   slugPath: "transaction/purchase/grc",
   endpoint: '/api/purchase-grc',
+  /* numbered pager with Rows-per-page, and every column header sorts on
+     click (components/ListView.jsx) */
+  pager: 'numbered',
+  sortable: true,
   scope: ["business","location","finYear"],
   actionPosition: "left",
   actionVariant: "dropdown",
@@ -15,7 +19,7 @@ const CONFIG = {
  
   /* Action ▾ menu, matching the deployed GRC list */
  actionMenu: [
-  { label: 'Edit', icon: 'pencil', to: (r) => '/admin/transaction/purchase/grc/' + r._id },
+  { label: 'Edit', icon: 'pencil', to: (r) => '/admin/transaction/purchase/grc/' + r._id, need: 'update' },
   { label: 'Barcode Print', icon: 'barcode', to: (r) => '/admin/transaction/purchase/barcode-print/' + r._id },
   { label: 'GRC Print', icon: 'printer', to: (r) => '/admin/transaction/purchase/grc/print/' + r._id },
 ],

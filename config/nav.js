@@ -64,6 +64,7 @@ import {
   LuSend,
   LuPackageCheck,
   LuPackageMinus,
+  LuArchive,
 } from 'react-icons/lu';
  
 export const NAV = [
@@ -472,11 +473,40 @@ export const NAV = [
   // },
 
 
-   {
+  //  {
+  //   label: 'Inter Company Sell',
+  //   icon: LuHouse,
+  //   children: [
+  //     { label: 'Delivery Challan', icon: LuFileCheck,
+  //       href: '/admin/transaction/intercompanysell/deliverychallan' },
+  //     { label: 'Receive Delivery Challan', icon: LuPackageCheck,
+  //       href: '/admin/transaction/intercompanysell/receivedeliverychallan' },
+  //     /* Consignment billing: the sender invoices the units its receivers
+  //        have SOLD - not the whole challan, which is what the older hidden
+  //        salesinvoice screen below did. */
+  //     { label: 'Sales Invoice', icon: LuFileText,
+  //       href: '/admin/transaction/intercompanysell/sales-invoice' },
+  //     /* the returns of IC challans, moved out of Receive Delivery
+  //        Challan's Returns tab onto a page of their own */
+  //     { label: 'Return Approval', icon: LuUndo2,
+  //       href: '/admin/transaction/intercompanysell/consignment' },
+  //     // { label: 'Sales Invoice', icon: LuFileText,
+  //     //   href: '/admin/transaction/intercompanysell/salesinvoice' },
+  //     // { label: 'Auto Purchases Received', icon: LuPackageCheck,
+  //     //   href: '/admin/transaction/intercompanysell/auto-purchases-received' },
+  //     // { label: 'Auto Purchases Return', icon: LuPackageMinus,
+  //     //   href: '/admin/transaction/intercompanysell/auto-purchases-return' },
+  //     // { label: 'Sales Return', icon: LuUndo2,
+  //     //   href: '/admin/transaction/intercompanysell/salereturn' },
+  //   ],
+  // },
+
+
+ {
     label: 'Inter Company Sell',
     icon: LuHouse,
     children: [
-      { label: 'Delivery Challan', icon: LuFileCheck,
+      { label: 'Consignment', icon: LuFileCheck,
         href: '/admin/transaction/intercompanysell/deliverychallan' },
       { label: 'Receive Delivery Challan', icon: LuPackageCheck,
         href: '/admin/transaction/intercompanysell/receivedeliverychallan' },
@@ -504,6 +534,8 @@ export const NAV = [
     ],
   },
 
+
+
   /* A TOP-LEVEL group of its own, between Inter Company Sell and Reports, so
      the hierarchy is exactly:  Main Reports > Master Stock Report  - with no
      intermediate menu. It is deliberately NOT a child of Reports, and the
@@ -523,6 +555,8 @@ export const NAV = [
          any permission already saved against it still applies. */
       { label: 'Barcode Report', icon: LuBarcode,
         href: '/admin/reports/barcode-report' },
+      { label: 'Excel / Data Import', icon: LuFileCog,
+        href: '/admin/report/data-import' },
     ],
   },
 
@@ -668,6 +702,8 @@ export const NAV = [
     icon: LuShoppingCart,
     children: [
       { label: 'Products', icon: LuTag, href: '/admin/ecommerce/product' },
+      /* a test copy of Products, same data (19-10-2026) */
+      { label: 'product-eccom', icon: LuTag, href: '/admin/ecommerce/product-eccom' },
       /* The same transfer engine as Stock Transfers, raised from the
          e-commerce side - not a separate inventory path. */
       { label: 'Direct Stock Transfer', icon: LuShuffle,
@@ -675,6 +711,16 @@ export const NAV = [
       /* Orders and Coupons are on the deployed sidebar but have no screen
          here yet. Left out rather than shipped as dead links - the same call
          Staff Management's three entries got. */
+    ],
+  },
+
+  /* Archive (21-10-2026): bills deleted from Sell -> POS land here, view
+     only. Visible to every logged-in user. */
+  {
+    label: 'Archive',
+    icon: LuArchive,
+    children: [
+      { label: 'POS Bills', icon: LuArchive, href: '/admin/archive/pos' },
     ],
   },
 

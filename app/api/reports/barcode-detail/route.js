@@ -364,9 +364,9 @@ import CompanyLocation from '@/models/CompanyLocation';
 import { Supplier } from '@/lib/contacts';
 import { requireSession } from '@/lib/session';
 import { barcodeFilter, unitFor, imageUrl, withTransaction, MOVEMENT_TYPES } from '@/lib/inventory';
-import { barcodeImageSrc } from '@/lib/barcodeImageService';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
+import { screenDenial, screenDenialAny, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
 
 /* /api/reports/barcode-detail?barcodeNo=<no>&business=<id>
 
@@ -400,6 +400,11 @@ export const PATCH = handler(async (req) => {
   await requirePermission(PERMISSIONS.BARCODE_GENERATE, {
     locationId: String(initial.currentLocationId || initial.locationId || '') || undefined,
   });
+
+  /* Roles & Permissions (17-10-2026): editing a barcode on its Details view
+     also needs Barcode Report -> Update */
+  const deniedEdit = await screenDenial({ session, screen: SCREENS.BARCODE_REPORT, label: 'the barcode report', action: PERM.UPDATE, businessId: initial.businessId });
+  if (deniedEdit) return json({ error: deniedEdit.message, code: deniedEdit.code }, 403);
 
   if (initial.status !== BARCODE_STATUS.IN_STOCK) {
     return json({ error: 'Only barcodes currently in stock can be edited.' }, 409);
@@ -592,6 +597,18 @@ export async function GET(req) {
 
   const business = sp.get('business');
 
+  /* Roles & Permissions (17-10-2026): the Details view is opened from the
+     Barcode Report and from the Master Stock Report's barcode links - Read
+     on either lets it through */
+  const denied = await screenDenialAny({
+    session,
+    screens: [SCREENS.BARCODE_REPORT, SCREENS.MASTER_STOCK_REPORT],
+    action: PERM.READ,
+    businessId: business,
+    label: 'the barcode report',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   /* Matched on every spelling the number can take - its own number, the
      composed value the bars carry, or the vendor's old printed one - which is
      the same rule the till scans by. See lib/barcodeValue. When several rows
@@ -625,11 +642,20 @@ export async function GET(req) {
 
   /* Item Info's Sub Group / Group / GST Slab - the item's masters (a barcode
      keeps no group of its own). The slab is the item's HSN's tax, else the
-     barcode's own GST %. */
+     barcode's own GST %.
+
+     The Item form stores its "Group" pick in item.subGroupId, and that pick can
+     be a sub-group (parentId set) OR a top-level group picked outright from the
+     product-group master - both live in the same collection, exactly the way
+     the Master Stock Report reads Group Name as item.subGroupId's own name. A
+     top-level group IS the item's Group; it is not a Sub Group with no parent.
+     So Group resolves parent-of-sub when there is a parent, and the group doc
+     itself when there is not - only then does Sub Group stay empty. */
   const sub = item?.subGroupId && isValidObjectId(String(item.subGroupId))
     ? await ProductGroup.findById(item.subGroupId).select('name parentId').lean() : null;
-  const group = sub?.parentId && isValidObjectId(String(sub.parentId))
-    ? await ProductGroup.findById(sub.parentId).select('name').lean() : null;
+  const isSubGroup = Boolean(sub?.parentId && isValidObjectId(String(sub.parentId)));
+  const group = isSubGroup
+    ? await ProductGroup.findById(String(sub.parentId)).select('name').lean() : null;
   const hsn = item?.hsnId && isValidObjectId(String(item.hsnId))
     ? await Hsn.findById(item.hsnId).select('taxSlabs').lean() : null;
   const slabId = hsn?.taxSlabs?.[0]?.gstTaxNameId;
@@ -637,7 +663,12 @@ export async function GET(req) {
 
   /* IDs for dropdown fields - so the edit form can pre-select the correct values */
   const subGroupId = sub?._id ? String(sub._id) : (item?.subGroupId ? String(item.subGroupId) : '');
-  const groupId = group?._id ? String(group._id) : (sub?.parentId ? String(sub.parentId) : '');
+  /* the Group id behind the display value: the parent's when the item's pick
+     was a sub-group, the pick's own id when it was a top-level group, so the
+     edit form preselects what actually holds */
+  const groupId = group?._id ? String(group._id)
+    : (isSubGroup && sub?.parentId ? String(sub.parentId)
+    : (sub?._id ? String(sub._id) : ''));
   const hsnId = hsn?._id ? String(hsn._id) : (item?.hsnId ? String(item.hsnId) : '');
   const gstSlabId = slab?._id ? String(slab._id) : '';
   const uomId = item?.uomId ? String(item.uomId) : (unit.uomId && isValidObjectId(String(unit.uomId)) ? String(unit.uomId) : '');
@@ -696,7 +727,11 @@ export async function GET(req) {
   /* THE BARCODE IMAGE - this barcode's own (barcodeLabel.imageUrl), as saved
      here or by the mobile app; nothing borrowed from the Item master. The
      item's picture, when it has one, is its own field beside it. */
-  const barcodeImageUrl = barcodeImageSrc(unit.imageUrl);
+  const barcodeImageUrl = imageUrl(
+    unit.imageUrl || unit.filePath || '',
+    unit.barcodeNo || unit.barcodeGenerated,
+    unit.oldBarcode
+  );
   const itemImageUrl = imageUrl(str(item?.image));
 
   return json({
@@ -730,8 +765,9 @@ export async function GET(req) {
       finalRate: unit.finalNet ?? null,
       dp: unit.dp || unit.dpPrice || null,
 
-      subGroup: sub?.name || '',
-      group: group?.name || '',
+      /* a top-level group picked outright is the Group - not a Sub Group */
+      subGroup: (sub && isSubGroup ? sub.name : '') || '',
+      group: group?.name || (sub && !isSubGroup ? sub.name : '') || '',
       gstSlab: slab?.taxName || (str(unit.gst) ? 'GST ' + str(unit.gst) + ' %' : ''),
       subGroupId,
       groupId,
@@ -749,7 +785,8 @@ export async function GET(req) {
       currentLocation: currentLoc?.name || '',
       originLocation: originLoc?.name || '',
       grcNo: str(unit.grcNo),
-      grcDate: unit.createdAt || null,
+      grcDate: unit.stockDate || unit.createdAt || null,
+      stockAge: (unit.stockAge !== undefined && unit.stockAge !== null) ? unit.stockAge : null,
       serialNo: unit.serialNo ?? unit.billSlNo ?? '',
       batchNo: str(unit.batchNo),
       transferNo: str(unit.transferNo),

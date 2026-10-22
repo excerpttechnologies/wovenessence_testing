@@ -21,6 +21,7 @@ import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
 import LoyaltyLedger from '@/models/LoyaltyLedger';
+import { sortedPage } from '@/lib/listSort';
 import {
   loyaltyRules, pointsBalance, allowedRedemption, redemptionValue, saleLedgerRows,
 } from '@/lib/loyalty';
@@ -243,9 +244,10 @@ export async function GET(req) {
      Collected counts the money tendered, so without these the card read
      more than the bills came to */
   const returned = round2(sums && sums.returned);
+  /* Return and Net taken off the card (user, 21-10-2026); in their place one
+     Total row = Cash + UPI + Bank, the three rows above it */
   paidByList.push(
-    { label: 'Return', amount: -returned },
-    { label: 'Net', amount: round2((sums && sums.paid) - returned) }
+    { label: 'Total', amount: round2(paidByList.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)) }
   );
 
   /* QTY SOLD SPLIT INTO PIECES AND METRES, over the same filtered set - 15
@@ -275,7 +277,63 @@ export async function GET(req) {
     { label: 'Mtrs', amount: round2(qtyBy.MTR) },
   ];
 
-  const rows = await PosInvoice.find(filter)
+  /* column-header sort (lib/listSort.js); without ?sortBy= the query
+     below runs exactly as before */
+  const rows = (await sortedPage(PosInvoice, filter, sp, {
+    page,
+    perPage,
+    keys: ['invoiceNo', 'totalAmount'],
+    computed: {
+      /* what the list shows, worked out exactly as the response below does */
+      date: {
+        select: 'date createdAt',
+        value: (d) => (d.date ? new Date(d.date).toISOString() : '') + '|' + (d.createdAt ? new Date(d.createdAt).toISOString() : ''),
+      },
+      counterName: {
+        select: 'counterId',
+        prepare: async (docs) => {
+          const ids = [...new Set(docs.map((d) => d.counterId).filter(Boolean).map(String))];
+          const list = ids.length ? await PosCounter.find({ _id: { $in: ids } }).select('_id counterName').lean() : [];
+          return new Map(list.map((c) => [String(c._id), c.counterName || '']));
+        },
+        value: (d, byId) => byId.get(String(d.counterId)) || '',
+      },
+      customerName: {
+        select: 'customerId customerSnapshot',
+        prepare: async (docs) => {
+          const ids = [...new Set(docs.map((d) => d.customerId).filter(Boolean).map(String))];
+          const list = ids.length ? await Customer.find({ _id: { $in: ids } }).select('_id businessName firstName middleName lastName').lean() : [];
+          return new Map(list.map((c) => [String(c._id), c]));
+        },
+        value: (d, byId) => {
+          const c = byId.get(String(d.customerId));
+          const s = d.customerSnapshot;
+          return c
+            ? c.businessName || [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ')
+            : s?.businessName || [s?.firstName, s?.middleName, s?.lastName].filter(Boolean).join(' ') || 'Walk-in Customer';
+        },
+      },
+      customerContact: {
+        select: 'customerId customerContact customerSnapshot',
+        prepare: async (docs) => {
+          const ids = [...new Set(docs.map((d) => d.customerId).filter(Boolean).map(String))];
+          const list = ids.length ? await Customer.find({ _id: { $in: ids } }).select('_id billingMobile').lean() : [];
+          return new Map(list.map((c) => [String(c._id), c.billingMobile || '']));
+        },
+        value: (d, byId) => d.customerContact || byId.get(String(d.customerId)) || d.customerSnapshot?.billingMobile || '',
+      },
+      salesPersonName: {
+        select: 'items.salesPerson',
+        prepare: async (docs) => {
+          const ids = [...new Set(docs.flatMap((d) => (d.items || []).map((l) => String(l.salesPerson || ''))).filter((v) => isValidObjectId(v)))];
+          const list = ids.length ? await SalesPerson.find({ _id: { $in: ids } }).select('_id name').lean() : [];
+          return new Map(list.map((p) => [String(p._id), p.name || '']));
+        },
+        value: (d, byId) => [...new Set((d.items || []).map((l) => byId.get(String(l.salesPerson || ''))).filter(Boolean))].join(', '),
+      },
+      totalItems: { select: 'items._id', value: (d) => (d.items || []).length },
+    },
+  })) ?? await PosInvoice.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
     .limit(perPage)

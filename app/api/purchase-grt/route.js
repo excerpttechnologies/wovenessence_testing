@@ -7,6 +7,8 @@ import { resolveRefLabels } from '@/lib/refLabels';
 import { validate, escapeRegex } from '@/lib/validate';
 import { nextSeriesNumber } from '@/lib/docnumber';
 import { FORM } from '@/app/admin/transaction/purchase/grt/form';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+import { sortedPage } from '@/lib/listSort';
 
 /* header fields AND the totals rows - the totals card holds real stored
    numbers (taxable value, round off, net value, the editable discounts).
@@ -42,12 +44,41 @@ async function nextGrtNumber({ businessId, locationId, finYear }) {
   });
 }
 
+/* Column-header sort (19-10-2026): the GRC No and money columns as the list
+   response below fills them in when a GRT does not store them itself. */
+const grtSort = (pick) => ({
+  select: 'grcNumber itemCount qty taxable gst netAmount items.grcId items.qty items.finalNet items.gst',
+  prepare: async (docs) => {
+    const ids = [...new Set(docs.filter((r) => !r.grcNumber).map((r) => r.items?.[0]?.grcId).filter((id) => id && isValidObjectId(id)).map(String))];
+    const grcs = ids.length ? await Grc.find({ _id: { $in: ids } }).select('grcNumber').lean() : [];
+    return new Map(grcs.map((g) => [String(g._id), g.grcNumber || '']));
+  },
+  value: (row, grcNo) => {
+    const items = Array.isArray(row.items) ? row.items : [];
+    const taxable = items.reduce((sum, item) => sum + (Number(item.finalNet) || 0) * (Number(item.qty) || 1), 0);
+    const gst = items.reduce((sum, item) => sum + (Number(item.finalNet) || 0) * (Number(item.qty) || 1) * ((Number(item.gst) || 0) / 100), 0);
+    const full = row.grcNumber && row.itemCount && row.taxable !== undefined;
+    if (pick === 'grcNumber') return row.grcNumber || grcNo.get(String(items[0]?.grcId || '')) || '';
+    if (pick === 'itemCount') return Number(full ? row.itemCount : (row.itemCount || items.length)) || 0;
+    if (pick === 'qty') return Number(full ? row.qty : (row.qty || items.reduce((sum, item) => sum + (Number(item.qty) || 1), 0))) || 0;
+    if (pick === 'taxable') return Number(full ? row.taxable : (row.taxable || taxable)) || 0;
+    if (pick === 'gst') return Number(full ? row.gst : (row.gst || gst)) || 0;
+    return Number(full ? row.netAmount : (row.netAmount || taxable + gst)) || 0;
+  },
+});
+
 export async function GET(req) {
   const session = await requireSession();
   if (!session) return json({ error: 'Unauthorized' }, 401);
 
   const sp = new URL(req.url).searchParams;
   await dbConnect();
+
+  /* Roles & Permissions (17-10-2026): GRT -> Read */
+  {
+    const denied = await screenDenial({ session, screen: SCREENS.GRT, label: 'GRT', action: PERM.READ, businessId: sp.get('business') });
+    if (denied) return json({ error: denied.message, code: denied.code }, 403);
+  }
 
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
@@ -76,7 +107,22 @@ export async function GET(req) {
   }
 
   const total = await Grt.countDocuments(filter);
-  const rows = await Grt.find(filter)
+  /* column-header sort (lib/listSort.js); without ?sortBy= the query
+     below runs exactly as before */
+  const rows = (await sortedPage(Grt, filter, sp, {
+    page,
+    perPage,
+    keys: ['grtNo', 'grtDate'],
+    refs: ['supplierId'],
+    computed: {
+      grcNumber: grtSort('grcNumber'),
+      qty: grtSort('qty'),
+      itemCount: grtSort('itemCount'),
+      taxable: grtSort('taxable'),
+      gst: grtSort('gst'),
+      netAmount: grtSort('netAmount'),
+    },
+  })) ?? await Grt.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
     .limit(perPage)
@@ -115,6 +161,12 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Roles & Permissions (17-10-2026): GRT -> Create */
+  {
+    const denied = await screenDenial({ session, screen: SCREENS.GRT, label: 'GRT', action: PERM.CREATE, businessId: body.business });
+    if (denied) return json({ error: denied.message, code: denied.code }, 403);
+  }
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

@@ -8,6 +8,10 @@ const CONFIG = {
   basePath: '/admin/inventory/',
   slugPath: "item",
   endpoint: '/api/item',
+  /* numbered pager with Rows-per-page, and every column header sorts on
+     click (components/ListView.jsx) */
+  pager: 'numbered',
+  sortable: true,
   scope: ["business"],
   addTitle: "Add Item",
   serialNumber: true,  // Enable serial numbers
@@ -18,7 +22,6 @@ const CONFIG = {
     { k: "uomId", t: "UOM", f: "ref" },
     { k: "prefix", t: "Prefix" },
     { k: "itemCode", t: "Item Code" },
-    { k: "ecommItemCode", t: "Ecomm Item Code" },
     // { k: "groupId", t: "Group", f: "ref" },
     { k: "subGroupId", t: " Group", f: "ref" },
   ],

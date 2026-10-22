@@ -1,6 +1,7 @@
 import { isValidObjectId } from 'mongoose';
 import dbConnect from '@/lib/db';
 import Item from '@/models/Item';
+import EcommerceProduct from '@/models/EcommerceProduct';
 import { BarcodeLabel } from '@/lib/barcodeLabel';
 import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
@@ -22,11 +23,22 @@ import {
 const ITEM = { screen: SCREENS.ITEM, label: 'items' };
 
 import { FIELDS } from '@/app/admin/inventory/item/fields';
+import { sortedPage } from '@/lib/listSort';
 
 /* /api/item - list + create. */
 
 const json = (d, s = 200) => Response.json(d, { status: s });
 const PER_PAGE = 10;
+const LEGACY_ECOMMERCE_FIELDS = new Set([
+  'ecommItemCode', 'productType', 'byWeave', 'byFabric', 'byCraft', 'byOccasion', 'byColour',
+  'weaveDescription', 'fabricDescription', 'craftDescription', 'occasionDescription', 'colourDescription',
+  'printDescriptionOverride', 'slug', 'seoTitle', 'seoDescription', 'ecommOffPercent',
+  'barcodePriceOverride', 'barcodeQtyOverride', 'barcodeStatusOverride', 'isFeatured',
+  'salesCount', 'displayName', 'additionalImages', 'isPublished', 'status',
+]);
+const itemFieldsOnly = (item) => Object.fromEntries(
+  Object.entries(item).filter(([field]) => !LEGACY_ECOMMERCE_FIELDS.has(field))
+);
 
 export async function GET(req) {
   const session = await requireSession();
@@ -57,19 +69,33 @@ export async function GET(req) {
     const barcodeRows = await BarcodeLabel.find({ $or: [{ barcodeGenerated: barcodeRx }, { oldBarcode: barcodeRx }] }).select('itemCode imageUrl').limit(100).lean();
     const barcodeCodes = barcodeRows.map((row) => row.itemCode).filter(Boolean);
     barcodeRows.forEach((row) => { if (row.itemCode && row.imageUrl) barcodeImageByCode[String(row.itemCode)] = row.imageUrl; });
-    filter.$or = [{ name: rx }, { prefix: rx }, { itemCode: rx }, { ecommItemCode: rx }, { description: rx }];
+    const ecommerceMatches = await EcommerceProduct.find({
+      ...(filter.businessId ? { businessId: filter.businessId } : {}),
+      ecommItemCode: rx,
+    }).select('itemId').lean();
+    filter.$or = [
+      { name: rx }, { prefix: rx }, { itemCode: rx }, { description: rx },
+      { _id: { $in: ecommerceMatches.map((product) => product.itemId) } },
+    ];
     if (barcodeCodes.length) filter.$or.push({ itemCode: { $in: barcodeCodes } });
   }
 
   const total = await Item.countDocuments(filter);
-  const rows = await Item.find(filter)
+  /* column-header sort (lib/listSort.js); without ?sortBy= the query
+     below runs exactly as before */
+  const rows = (await sortedPage(Item, filter, sp, {
+    page,
+    perPage,
+    keys: ['name', 'itemType', 'prefix', 'itemCode'],
+    refs: ['hsnId', 'uomId', 'subGroupId'],
+  })) ?? await Item.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
     .limit(perPage)
     .lean();
 
   return json({
-    rows: rows.map((r) => ({ ...r, _id: String(r._id), image: r.image || barcodeImageByCode[String(r.itemCode)] || '' })),
+    rows: rows.map((r) => ({ ...itemFieldsOnly(r), _id: String(r._id), image: r.image || barcodeImageByCode[String(r.itemCode)] || '' })),
     labels: await resolveRefLabels(rows),
     total,
     page,

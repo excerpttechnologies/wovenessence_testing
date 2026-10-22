@@ -11,6 +11,10 @@ import { validate, escapeRegex } from '@/lib/validate';
 import { nextDocNumber } from '@/lib/docnumber';
 import { itemPriceErrors } from '@/lib/purchasePrice';
 import { FORM } from '@/app/admin/transaction/purchase/grc/form';
+import { screenDenial, screenDenialAnyAction, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+import { sortedPage } from '@/lib/listSort';
+
+const GRC_SCREEN = { screen: SCREENS.GRC, label: 'GRC' };
 
 /* header fields AND the totals rows - the totals card holds real stored
    numbers (taxable value, round off, net value, the editable discounts).
@@ -36,12 +40,43 @@ const FIELDS = (FORM.cards || []).flatMap((c) => {
 const json = (d, s = 200) => Response.json(d, { status: s });
 const PER_PAGE = 10;
 
+/* Column-header sort on the money columns (19-10-2026): the same
+   resolution the list response runs (grcMoney), over the filtered set. */
+const grcMoneySort = (pick) => ({
+  select: 'gst taxable netAmount',
+  prepare: async (docs) => {
+    const need = docs.filter((r) => !headerGstIsAmount(r)).map((r) => String(r._id));
+    const byGrc = new Map();
+    if (need.length) {
+      const labelRows = await BarcodeLabel.find({ grcId: { $in: need } })
+        .select('grcId gst qty qtyNum finalNet purRate').lean();
+      labelRows.forEach((row) => {
+        const key = String(row.grcId);
+        if (!byGrc.has(key)) byGrc.set(key, []);
+        byGrc.get(key).push(row);
+      });
+    }
+    return byGrc;
+  },
+  value: (d, byGrc) => grcMoney(d, byGrc.get(String(d._id)))[pick],
+});
+
 export async function GET(req) {
   const session = await requireSession();
   if (!session) return json({ error: 'Unauthorized' }, 401);
 
   const sp = new URL(req.url).searchParams;
   await dbConnect();
+
+  /* Roles & Permissions (17-10-2026), Purchase > GRC: the list needs Read;
+     the ?availableLr=1 picker (used while raising a document) also lets
+     Create / Update through */
+  {
+    const denied = sp.get('availableLr') === '1'
+      ? await screenDenialAnyAction({ session, screens: [SCREENS.GRC], actions: [PERM.READ, PERM.CREATE, PERM.UPDATE], businessId: sp.get('business'), label: 'GRC' })
+      : await screenDenial({ session, ...GRC_SCREEN, action: PERM.READ, businessId: sp.get('business') });
+    if (denied) return json({ error: denied.message, code: denied.code }, 403);
+  }
 
   if (sp.get('availableLr') === '1') {
     const deliveryFilter = {};
@@ -128,7 +163,21 @@ export async function GET(req) {
   }
 
   const total = await Grc.countDocuments(filter);
-  const rows = await Grc.find(filter)
+  /* column-header sort (lib/listSort.js); without ?sortBy= the query
+     below runs exactly as before */
+  const rows = (await sortedPage(Grc, filter, sp, {
+    page,
+    perPage,
+    keys: ['grcNumber', 'grcDate', 'occasion', 'vendorDocNo', 'freightMode', 'totalQuantity'],
+    refs: ['supplierId', 'logisticId', 'purchaseGroupId', 'agentId'],
+    computed: {
+      /* Taxable / GST / Net Amount exactly as the list below shows them -
+         lib/grcMoney.js, with the barcode rows of an older header */
+      taxable: grcMoneySort('taxable'),
+      gstAmount: grcMoneySort('gst'),
+      netAmount: grcMoneySort('netAmount'),
+    },
+  })) ?? await Grc.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
     .limit(perPage)
@@ -194,6 +243,10 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Roles & Permissions (17-10-2026): GRC -> Create */
+  const denied = await screenDenial({ session, ...GRC_SCREEN, action: PERM.CREATE, businessId: body.business });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);
