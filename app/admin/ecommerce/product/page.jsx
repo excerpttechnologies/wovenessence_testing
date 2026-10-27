@@ -1,5 +1,5 @@
 'use client';
-import ListView from '@/components/ListView';
+import ListView from '@/components/ListviewEccom';
 
 /* E-commerce -> Products.
 
@@ -35,6 +35,7 @@ const CONFIG = {
   ],
 
   columns: [
+    { k: 'image', t: 'Image', f: 'image' },
     { k: 'name', t: 'Name' },
     { k: 'itemCode', t: 'Item Code' },
     { k: 'hsnCode', t: 'HSN Code' },

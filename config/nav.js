@@ -66,7 +66,10 @@ import {
   LuPackageMinus,
   LuArchive,
 } from 'react-icons/lu';
- 
+
+/* Archive menu on/off - see the Archive entry near the end (23-10-2026) */
+const SHOW_ARCHIVE = false;
+
 export const NAV = [
  
   {
@@ -143,6 +146,12 @@ export const NAV = [
         label: 'Cash Counter Master',
         icon: LuMonitor,
         href: '/admin/setting/poscounter',
+      },
+      /* footers for the POS invoice, picked on the invoice page (26-10-2026) */
+      {
+        label: 'POS Footer Templates',
+        icon: LuMonitor,
+        href: '/admin/setting/pos-footer',
       },
       {
         label: 'Barcode Settings',
@@ -704,6 +713,10 @@ export const NAV = [
       { label: 'Products', icon: LuTag, href: '/admin/ecommerce/product' },
       /* a test copy of Products, same data (19-10-2026) */
       { label: 'product-eccom', icon: LuTag, href: '/admin/ecommerce/product-eccom' },
+      /* Storefront traffic, product interest and tracked purchases. Read
+         separately from ERP sales; nothing here is posted into a ledger. */
+      { label: 'Website Analytics', icon: LuChartNoAxesColumn,
+        href: '/admin/ecommerce/website-analytics' },
       /* The same transfer engine as Stock Transfers, raised from the
          e-commerce side - not a separate inventory path. */
       { label: 'Direct Stock Transfer', icon: LuShuffle,
@@ -715,14 +728,16 @@ export const NAV = [
   },
 
   /* Archive (21-10-2026): bills deleted from Sell -> POS land here, view
-     only. Visible to every logged-in user. */
-  {
+     only. Visible to every logged-in user.
+     HIDDEN for now (client, 23-10-2026) - set SHOW_ARCHIVE to true to bring
+     it back; the page /admin/archive/pos is kept. */
+  ...(SHOW_ARCHIVE ? [{
     label: 'Archive',
     icon: LuArchive,
     children: [
       { label: 'POS Bills', icon: LuArchive, href: '/admin/archive/pos' },
     ],
-  },
+  }] : []),
 
   {
     label: 'Logout',
