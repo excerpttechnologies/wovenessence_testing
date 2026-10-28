@@ -1432,7 +1432,7 @@ export default function PosTill() {
     try {
       const paid = paymentData.payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
       const customerRecord = selectedCustomer || customerOptions.find((option) => option.value === customer)?.customer;
-      const response = await fetch('/api/sell-pos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, location, finYear, data: { date: saleDate, finYear, customerId: customer === 'walkin' ? null : customer, customerContact: customerRecord?.billingMobile || '', customerSnapshot: customer === 'walkin' ? null : customerRecord || null, counterId: counter || null, billingType: payMode, exempted: 'NO', items, payments: paymentData.payments, sellNote: paymentData.sellNote, staffNote: paymentData.staffNote, shipping: Number(shipping || 0), totalAmount: netAmount, paid, /* the server re-reads the balance and the master and decides for itself; this is the request, not the ruling */ loyaltyRedeemPoints: redeemPoints } }) });
+      const response = await fetch('/api/sell-pos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, location, finYear, data: { date: saleDate, finYear, customerId: customer === 'walkin' ? null : customer, customerContact: customerRecord?.billingMobile || '', customerSnapshot: customer === 'walkin' ? null : customerRecord || null, counterId: counter || null, billingType: payMode, exempted: 'NO', items, payments: paymentData.payments, sellNote: paymentData.sellNote, staffNote: paymentData.staffNote, salesChannel: paymentData.salesChannel || '', shipping: Number(shipping || 0), totalAmount: netAmount, paid, /* the server re-reads the balance and the master and decides for itself; this is the request, not the ruling */ loyaltyRedeemPoints: redeemPoints } }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Unable to save POS invoice');
       /* billed - the refresh copy of this bill must not come back */
@@ -1452,8 +1452,10 @@ export default function PosTill() {
     <div className="pos-till fixed inset-0 z-50 flex flex-col overflow-auto bg-white">
       {/* TOP AREA (user, 21-10-2026): the scanned item's photo moved out of
           the header into its own column on the right, spanning the header
-          and the date / customer row, so it can be shown bigger */}
-      <div className="flex items-stretch"><div className="min-w-0 flex-1">
+          and the date / customer row, so it can be shown bigger.
+          (user, 27-10-2026) the three rows spread evenly down the photo's
+          height, so there is no empty gap under the Cash row - layout only */}
+      <div className="flex items-stretch"><div className="flex min-w-0 flex-1 flex-col justify-evenly pb-2">
       <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[13.5px]">{/* The till fills the screen and has no sidebar, so without this the only
           way out is the browser's own Back. It goes to the POS list - the
           screen whose ADD button opens this one - and carries the scope so the
